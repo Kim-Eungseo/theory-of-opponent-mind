@@ -93,12 +93,20 @@ def main():
     else:
         print("using random policy")
 
+    # target frame count: one per tic of target game-time
+    target_frames = int(args.seconds * 35 / max(args.frame_skip, 1))
+
     obs, _ = env.reset()
     frames: list[np.ndarray] = []
-    step = 0
-    returns = {a: 0.0 for a in env.agents}
+    returns = {a: 0.0 for a in env.possible_agents}
+    episodes = 0
 
-    while env.agents:
+    while len(frames) < target_frames:
+        if not env.agents:
+            # env ended a round — auto-reset for a continuous video
+            obs, _ = env.reset()
+            episodes += 1
+
         if policy_net is None:
             actions = {a: env.action_space(a).sample() for a in env.agents}
         else:
@@ -108,8 +116,7 @@ def main():
         for a, r in rewards.items():
             returns[a] += r
 
-        views = [infos[a]["frame"] for a in sorted(infos)]  # each (H, W, 3) RGB
-        # label each view with player id
+        views = [infos[a]["frame"] for a in sorted(infos)]
         labeled = []
         for i, v in enumerate(views):
             v2 = v.copy()
@@ -118,11 +125,10 @@ def main():
                 0.6, (255, 255, 0), 2, cv2.LINE_AA,
             )
             labeled.append(v2)
-        frame = np.hstack(labeled)
-        frames.append(frame)
-        step += 1
+        frames.append(np.hstack(labeled))
 
     env.close()
+    print(f"captured {len(frames)} frames across {episodes + 1} episode(s)")
 
     if not frames:
         print("no frames captured")

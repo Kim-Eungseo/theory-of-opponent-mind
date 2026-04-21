@@ -96,6 +96,7 @@ def _player_worker(
                 f"-netmode 0 -deathmatch "
                 f"+timelimit {timelimit_min:.3f} "
                 f"+sv_forcerespawn 1 +sv_noautoaim 1 "
+                f"+sv_noexit 1 +fraglimit 0 "
                 f"+name Player{player_idx} +colorset {player_idx}"
             )
         else:
@@ -171,10 +172,12 @@ def _player_worker(
                 action_vec[int(arg) % n_buttons] = 1
                 game.make_action(action_vec, frame_skip)
 
-                terminated = bool(game.is_episode_finished())
+                # sv_forcerespawn=1 means the server respawns dead players
+                # automatically. Explicit respawn_player() here crashes
+                # ViZDoom when is_episode_finished is already True, so we
+                # just report dead=True without intervening.
                 dead = bool(game.is_player_dead())
-                if dead and not terminated:
-                    game.respawn_player()
+                terminated = bool(game.is_episode_finished())
 
                 cur_frags = _read_var(vzd.GameVariable.FRAGCOUNT, prev["frags"])
                 cur_deaths = _read_var(vzd.GameVariable.DEATHCOUNT, prev["deaths"])
