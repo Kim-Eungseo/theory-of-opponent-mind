@@ -1,0 +1,103 @@
+.omc
+.claude
+.cursor
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# RL training artifacts
+runs/
+logs/
+checkpoints/
+saved_models/
+models/
+replay_buffers/
+wandb/
+mlruns/
+outputs/
+results/
+experiments/
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.hdf5
+*.npz
+*.npy
+
+# TensorBoard
+tensorboard_logs/
+tb_logs/
+events.out.tfevents.*
+
+# Hydra / config outputs
+.hydra/
+multirun/
+
+# Ray / RLlib
+ray_results/
+~/ray_results/
+
+# Stable Baselines / Gymnasium
+monitor.csv
+monitor.json
+
+# Videos / renders
+videos/
+recordings/
+*.mp4
+*.avi
+*.gif
+
+# ViZDoom runtime scratch
+_vizdoom/
+_vizdoom.ini
+
+# Profiling
+*.prof
+*.lprof
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Secrets / config
+.env.local
+secrets.yaml
+secrets.json

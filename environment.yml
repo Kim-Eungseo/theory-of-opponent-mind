@@ -1,0 +1,12 @@
+name: tom
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - vizdoom>=1.3.0
+      - gymnasium>=0.29
+      - pettingzoo>=1.24
+      - numpy>=1.26
+      - opencv-python>=4.8
