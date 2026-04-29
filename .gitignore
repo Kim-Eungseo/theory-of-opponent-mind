@@ -1,8 +1,14 @@
-.omc
-.claude
-.cursor
+# ── Tooling / IDE ────────────────────────────────────────
+.omc/
+.claude/
+.cursor/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
 
-# Python
+# ── Python ───────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -20,6 +26,13 @@ wheels/
 pip-wheel-metadata/
 *.so
 
+# Modern python tooling
+.uv/
+uv.lock
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
 # Virtual environments
 .venv/
 venv/
@@ -27,12 +40,23 @@ env/
 ENV/
 .env
 
-# Jupyter
+# ── Jupyter ──────────────────────────────────────────────
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# RL training artifacts
+# ── Testing ──────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ── External / vendored repos ────────────────────────────
+external/
+
+# ── RL training artifacts ────────────────────────────────
+# All training output dirs (vizdoom, sf, hanabi, overcooked, carroll, …)
 runs/
+runs_*/
 logs/
 checkpoints/
 saved_models/
@@ -43,6 +67,9 @@ mlruns/
 outputs/
 results/
 experiments/
+ray_results/
+
+# Trained-model / data artifacts
 *.pkl
 *.pt
 *.pth
@@ -51,53 +78,46 @@ experiments/
 *.hdf5
 *.npz
 *.npy
+*.duckdb
 
-# TensorBoard
+# ── TensorBoard ──────────────────────────────────────────
 tensorboard_logs/
 tb_logs/
 events.out.tfevents.*
 
-# Hydra / config outputs
+# ── Hydra / config outputs ───────────────────────────────
 .hydra/
 multirun/
 
-# Ray / RLlib
-ray_results/
-~/ray_results/
-
-# Stable Baselines / Gymnasium
+# ── Stable Baselines / Gymnasium ─────────────────────────
 monitor.csv
 monitor.json
 
-# Videos / renders
+# ── Videos / renders ─────────────────────────────────────
 videos/
 recordings/
 *.mp4
 *.avi
 *.gif
+*.mov
 
-# ViZDoom runtime scratch
+# ── ViZDoom runtime scratch ──────────────────────────────
 _vizdoom/
 _vizdoom.ini
 
-# Profiling
+# ── Profiling ────────────────────────────────────────────
 *.prof
 *.lprof
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
+# ── Stray logs / scratch ─────────────────────────────────
+*.log
+nohup.out
+.scratch/
+notes/local/
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# Secrets / config
+# ── Secrets ──────────────────────────────────────────────
 .env.local
 secrets.yaml
 secrets.json
+*.pem
+*.key

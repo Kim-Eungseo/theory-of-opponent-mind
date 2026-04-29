@@ -195,6 +195,8 @@ class IPPOConfig:
     gae_lambda: float = 0.98
     clip_eps: float = 0.05
     ent_coef: float = 0.1
+    ent_coef_end: float | None = None  # if set, anneal ent_coef from cfg.ent_coef → ent_coef_end
+    ent_coef_horizon: int = 300_000  # steps over which entropy anneals
     vf_coef: float = 0.5
     om_coef: float = 0.0
     om_in_policy: bool = False
@@ -287,6 +289,13 @@ def train(cfg: IPPOConfig) -> str:
         shaped_coef = cfg.shaped_reward_coef_start + frac * (cfg.shaped_reward_coef_end - cfg.shaped_reward_coef_start)
         for sub in env.envs:
             sub.shaped_reward_coef = shaped_coef
+
+        # entropy annealing (Carroll et al. style)
+        if cfg.ent_coef_end is not None:
+            t = min(1.0, global_step / max(1, cfg.ent_coef_horizon))
+            current_ent_coef = cfg.ent_coef + t * (cfg.ent_coef_end - cfg.ent_coef)
+        else:
+            current_ent_coef = cfg.ent_coef
 
         T, N = cfg.rollout, cfg.num_envs
         buf = {
@@ -445,7 +454,7 @@ def train(cfg: IPPOConfig) -> str:
                     loss = (
                         p_loss
                         + cfg.vf_coef * v_loss
-                        + cfg.ent_coef * ent_loss
+                        + current_ent_coef * ent_loss
                         + cfg.om_coef * om_loss
                         + cfg.som_coef * som_loss
                         + cfg.tom_coef * tom_loss

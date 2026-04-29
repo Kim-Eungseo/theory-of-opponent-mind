@@ -25,6 +25,9 @@ def main():
     ap.add_argument("--gae-lambda", type=float, default=0.98)
     ap.add_argument("--clip-eps", type=float, default=0.05)
     ap.add_argument("--ent-coef", type=float, default=0.1)
+    ap.add_argument("--ent-coef-end", type=float, default=None,
+                    help="If set, anneal ent_coef from --ent-coef → --ent-coef-end over --ent-coef-horizon steps")
+    ap.add_argument("--ent-coef-horizon", type=int, default=300_000)
     ap.add_argument("--vf-coef", type=float, default=0.5)
     ap.add_argument("--om-coef", type=float, default=0.0,
                     help="Partner-action prediction aux loss coefficient; 0 = vanilla baseline")
@@ -39,6 +42,8 @@ def main():
     ap.add_argument("--tom-hidden", type=int, default=128)
     ap.add_argument("--tom-in-policy", action="store_true",
                     help="Route trajectory-OM softmax into policy/value head input")
+    ap.add_argument("--hidden", type=int, default=256,
+                    help="Encoder hidden width (use larger to capacity-match TOM+BAD)")
     ap.add_argument("--shaped-anneal-frac", type=float, default=0.5)
     ap.add_argument("--ckpt-interval", type=int, default=200_000)
     ap.add_argument("--seed", type=int, default=0)
@@ -61,6 +66,8 @@ def main():
         gae_lambda=args.gae_lambda,
         clip_eps=args.clip_eps,
         ent_coef=args.ent_coef,
+        ent_coef_end=args.ent_coef_end,
+        ent_coef_horizon=args.ent_coef_horizon,
         vf_coef=args.vf_coef,
         om_coef=args.om_coef,
         om_in_policy=args.om_in_policy,
@@ -69,6 +76,7 @@ def main():
         tom_history_len=args.tom_history_len,
         tom_hidden=args.tom_hidden,
         tom_in_policy=args.tom_in_policy,
+        hidden=args.hidden,
         shaped_reward_anneal_frac=args.shaped_anneal_frac,
         ckpt_interval_steps=args.ckpt_interval,
         seed=args.seed,
