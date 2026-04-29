@@ -45,11 +45,30 @@ DEFAULT_VARIABLES: list[vzd.GameVariable] = [
     vzd.GameVariable.DEATHCOUNT,
     vzd.GameVariable.HEALTH,
     vzd.GameVariable.ARMOR,
+    vzd.GameVariable.DAMAGECOUNT,         # damage you dealt (monotonic)
+    vzd.GameVariable.DAMAGE_TAKEN,        # damage received (monotonic)
+    vzd.GameVariable.HITCOUNT,            # hits landed
+    vzd.GameVariable.HITS_TAKEN,          # hits received
+    vzd.GameVariable.AMMO2,
+    vzd.GameVariable.AMMO3,
     vzd.GameVariable.SELECTED_WEAPON,
     vzd.GameVariable.SELECTED_WEAPON_AMMO,
 ]
 
 VAR_INDEX = {v: i for i, v in enumerate(DEFAULT_VARIABLES)}
+
+# Sample-Factory-inspired shaping. Frag (+1) is the dominant terminal signal,
+# but dense rewards (damage dealt, healing, pickups) provide useful gradient
+# even when kills are rare.
+REWARD_CONFIG: dict[str, float] = {
+    "frag": 1.0,            # +1 per kill
+    "death": -0.1,          # soft death penalty (was -0.5 — too risk-averse)
+    "damage_dealt": 0.005,  # per HP of damage landed
+    "health": 0.01,         # symmetric: + on heal pickup, - on taking damage
+    "armor_gain": 0.005,    # only positive delta
+    "ammo_gain": 0.002,     # only positive delta (sum across slots)
+    "living": 0.0005,       # mild per-step bonus to discourage freezing
+}
 
 
 def _free_port() -> int:
@@ -152,7 +171,10 @@ def _player_worker(
             np.transpose(state.screen_buffer, (1, 2, 0))
         )
 
-    prev = {"frags": 0, "deaths": 0, "health": 100, "armor": 0}
+    prev = {
+        "frags": 0, "deaths": 0, "health": 100, "armor": 0,
+        "damage_dealt": 0, "ammo": 0,
+    }
     conn.send(("ready", {"obs": _observe(), "n_buttons": n_buttons, "n_vars": n_vars}))
 
     def _read_var(var: vzd.GameVariable, fallback: int) -> int:
@@ -179,27 +201,54 @@ def _player_worker(
                 dead = bool(game.is_player_dead())
                 terminated = bool(game.is_episode_finished())
 
-                cur_frags = _read_var(vzd.GameVariable.FRAGCOUNT, prev["frags"])
-                cur_deaths = _read_var(vzd.GameVariable.DEATHCOUNT, prev["deaths"])
-                cur_health = _read_var(vzd.GameVariable.HEALTH, prev["health"])
-                cur_armor = _read_var(vzd.GameVariable.ARMOR, prev["armor"])
+                # clamped reads; engine can momentarily report stale / huge
+                # sentinels (e.g. HEALTH right after respawn).
+                def _rd(gv, lo=0, hi=10_000_000):
+                    try:
+                        v = int(game.get_game_variable(gv))
+                    except Exception:
+                        return 0
+                    return max(lo, min(hi, v))
+
+                cur_frags = _rd(vzd.GameVariable.FRAGCOUNT, -100, 100)
+                cur_deaths = _rd(vzd.GameVariable.DEATHCOUNT, 0, 1000)
+                cur_health = _rd(vzd.GameVariable.HEALTH, 0, 200)
+                cur_armor = _rd(vzd.GameVariable.ARMOR, 0, 200)
+                cur_dmg_dealt = _rd(vzd.GameVariable.DAMAGECOUNT, 0, 1_000_000)
+                cur_ammo = _rd(vzd.GameVariable.AMMO2, 0, 1000) + _rd(
+                    vzd.GameVariable.AMMO3, 0, 1000,
+                )
+
+                frag_delta = max(0, min(5, cur_frags - prev["frags"]))
+                death_delta = max(0, min(5, cur_deaths - prev["deaths"]))
+                health_delta = max(-200, min(200, cur_health - prev["health"]))
+                armor_delta = max(0, cur_armor - prev["armor"])
+                dmg_dealt_delta = max(0, min(500, cur_dmg_dealt - prev["damage_dealt"]))
+                ammo_delta = max(0, min(500, cur_ammo - prev["ammo"]))
 
                 reward = (
-                    1.0 * (cur_frags - prev["frags"])
-                    - 0.5 * (cur_deaths - prev["deaths"])
-                    + 0.01 * (cur_health - prev["health"])
+                    REWARD_CONFIG["frag"] * frag_delta
+                    + REWARD_CONFIG["death"] * death_delta
+                    + REWARD_CONFIG["damage_dealt"] * dmg_dealt_delta
+                    + REWARD_CONFIG["health"] * health_delta
+                    + REWARD_CONFIG["armor_gain"] * armor_delta
+                    + REWARD_CONFIG["ammo_gain"] * ammo_delta
+                    + REWARD_CONFIG["living"]
                 )
                 prev["frags"] = cur_frags
                 prev["deaths"] = cur_deaths
                 prev["armor"] = cur_armor
-                if cur_health > 0:
-                    prev["health"] = cur_health
+                prev["health"] = cur_health
+                prev["damage_dealt"] = cur_dmg_dealt
+                prev["ammo"] = cur_ammo
 
                 info = {
                     "frags": cur_frags,
                     "deaths": cur_deaths,
                     "health": cur_health,
                     "armor": cur_armor,
+                    "damage_dealt": cur_dmg_dealt,
+                    "ammo": cur_ammo,
                     "dead": dead,
                 }
                 if record:
@@ -232,7 +281,7 @@ class VizDoomMultiAgentEnv(ParallelEnv):
         self,
         num_players: int = 2,
         scenario: str | None = None,
-        episode_timeout_seconds: float = 60.0,
+        episode_timeout_seconds: float = 720.0,
         frame_skip: int = 4,
         frame_shape: tuple[int, int] = (84, 84),
         ticrate: int = 1000,
@@ -294,6 +343,36 @@ class VizDoomMultiAgentEnv(ParallelEnv):
     def action_space(self, agent: str):
         return self.action_spaces[agent]
 
+    @property
+    def num_agents(self) -> int:
+        return len(self.possible_agents)
+
+    @property
+    def max_num_agents(self) -> int:
+        return len(self.possible_agents)
+
+    @property
+    def num_envs(self) -> int:
+        return 1
+
+    @property
+    def state_space(self) -> gym.spaces.Dict:
+        """For independent critics (IPPO/self-play) we don't need a true
+        global state — each agent's value function is per-agent. Use player_0's
+        observation space as the placeholder so skrl's memory can allocate
+        matching tensors.
+        """
+        return self.observation_spaces[self.possible_agents[0]]
+
+    def state(self) -> dict[str, np.ndarray]:
+        if self._last_obs and self.possible_agents[0] in self._last_obs:
+            return self._last_obs[self.possible_agents[0]]
+        H, W = self.frame_shape
+        return {
+            "screen": np.zeros((3, H, W), dtype=np.uint8),
+            "gamevars": np.zeros(self.n_vars, dtype=np.float32),
+        }
+
     def _spawn_all(self) -> None:
         port = self._port_override if self._port_override is not None else _free_port()
         for i, agent in enumerate(self.possible_agents):
@@ -336,6 +415,11 @@ class VizDoomMultiAgentEnv(ParallelEnv):
 
         obs: dict[str, dict] = {}
         for agent, pipe in self._pipes.items():
+            if not pipe.poll(timeout=90.0):
+                self.close()
+                raise TimeoutError(
+                    f"{agent} worker failed to init within 90s"
+                )
             tag, payload = pipe.recv()
             if tag == "init_error":
                 self.close()
@@ -347,6 +431,8 @@ class VizDoomMultiAgentEnv(ParallelEnv):
         self._last_obs = obs
         infos = {a: {} for a in self.agents}
         return obs, infos
+
+    STEP_RECV_TIMEOUT = 30.0  # seconds; worker silent this long -> treat as hung
 
     def step(
         self, actions: dict[str, int]
@@ -367,7 +453,12 @@ class VizDoomMultiAgentEnv(ParallelEnv):
         infos: dict[str, dict] = {}
 
         for agent in self.agents:
-            tag, payload = self._pipes[agent].recv()
+            pipe = self._pipes[agent]
+            if not pipe.poll(timeout=self.STEP_RECV_TIMEOUT):
+                raise TimeoutError(
+                    f"{agent} worker silent for >{self.STEP_RECV_TIMEOUT}s"
+                )
+            tag, payload = pipe.recv()
             if tag != "step_ok":
                 raise RuntimeError(f"{agent} step failed: {tag} {payload!r}")
             o, r, term, trunc, info = payload

@@ -254,7 +254,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--total-steps", type=int, default=20_000)
     ap.add_argument("--rollout-steps", type=int, default=128)
-    ap.add_argument("--episode-seconds", type=float, default=20.0)
+    ap.add_argument("--episode-seconds", type=float, default=720.0)
     ap.add_argument("--ticrate", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()

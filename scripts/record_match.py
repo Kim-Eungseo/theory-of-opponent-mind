@@ -19,29 +19,59 @@ from tom.envs import VizDoomMultiAgentEnv
 
 
 def _load_policy(ckpt: str, n_actions: int, n_vars: int, device: str = "cpu"):
+    """Load either custom PPO (tom.training.ppo.CNNActorCritic) or skrl IPPO
+    per-agent checkpoint. Returns a callable taking (obs_dict, agents) -> actions.
+    """
     import torch
 
+    raw = torch.load(ckpt, map_location=device, weights_only=False)
+
+    # skrl layout: {'player_0': {'policy': state_dict, 'value': ..., 'optimizer': ...}, ...}
+    if isinstance(raw, dict) and "player_0" in raw and "policy" in raw["player_0"]:
+        from tom.training.skrl_ppo import DoomActor
+        import gymnasium as gym
+
+        obs_space = gym.spaces.Dict({
+            "screen":   gym.spaces.Box(0, 255, (3, 84, 84), np.uint8),
+            "gamevars": gym.spaces.Box(-1e6, 1e6, (n_vars,), np.float32),
+        })
+        act_space = gym.spaces.Discrete(n_actions)
+        nets = {}
+        for agent_id in sorted(raw.keys()):
+            net = DoomActor(obs_space, act_space, device).to(device)
+            net.load_state_dict(raw[agent_id]["policy"])
+            net.eval()
+            nets[agent_id] = net
+
+        def _skrl_act(obs, agents, _device=device):
+            acts = {}
+            for a in agents:
+                ai = a if a in nets else list(nets.keys())[0]
+                screen = torch.from_numpy(obs[a]["screen"]).unsqueeze(0).to(_device)
+                gv = torch.from_numpy(obs[a]["gamevars"]).unsqueeze(0).to(_device)
+                flat = torch.cat([screen.flatten(1).float(), gv], dim=-1)
+                logits, _ = nets[ai].compute({"observations": flat}, role="policy")
+                acts[a] = int(torch.distributions.Categorical(logits=logits).sample().item())
+            return acts
+        return ("skrl", _skrl_act)
+
+    # custom PPO layout: bare state_dict
     from tom.training.ppo import CNNActorCritic
-
     net = CNNActorCritic(n_actions, n_vars).to(device)
-    state = torch.load(ckpt, map_location=device, weights_only=True)
-    net.load_state_dict(state)
+    net.load_state_dict(raw)
     net.eval()
-    return net
 
-
-def _act_policy(net, obs: dict, agents: list[str], device: str = "cpu"):
-    import torch
-
-    screen = np.stack([obs[a]["screen"] for a in agents])
-    gv = np.stack([obs[a]["gamevars"] for a in agents])
-    with torch.no_grad():
-        logits, _ = net(
-            torch.from_numpy(screen).to(device),
-            torch.from_numpy(gv).to(device),
-        )
-        actions = torch.distributions.Categorical(logits=logits).sample()
-    return {a: int(actions[i].item()) for i, a in enumerate(agents)}
+    def _custom_act(obs, agents, _device=device):
+        screen = np.stack([obs[a]["screen"] for a in agents])
+        gv = np.stack([obs[a]["gamevars"] for a in agents])
+        with torch.no_grad():
+            logits, _ = net(
+                torch.from_numpy(screen).to(_device),
+                torch.from_numpy(gv).to(_device),
+            )
+            actions = torch.distributions.Categorical(logits=logits).sample()
+        return {a: int(actions[i].item()) for i, a in enumerate(agents)}
+    return ("custom", _custom_act)
 
 
 def main():
@@ -78,7 +108,7 @@ def main():
         record=True,
     )
 
-    policy_net = None
+    policy_act = None
     device = "cpu"
     if args.ckpt:
         try:
@@ -86,10 +116,10 @@ def main():
             device = args.device if torch.cuda.is_available() else "cpu"
         except ImportError:
             device = "cpu"
-        policy_net = _load_policy(
+        kind, policy_act = _load_policy(
             args.ckpt, env.n_buttons, env.n_vars, device=device
         )
-        print(f"loaded policy from {args.ckpt} (device={device})")
+        print(f"loaded {kind} policy from {args.ckpt} (device={device})")
     else:
         print("using random policy")
 
@@ -107,10 +137,10 @@ def main():
             obs, _ = env.reset()
             episodes += 1
 
-        if policy_net is None:
+        if policy_act is None:
             actions = {a: env.action_space(a).sample() for a in env.agents}
         else:
-            actions = _act_policy(policy_net, obs, list(env.agents), device=device)
+            actions = policy_act(obs, list(env.agents))
 
         obs, rewards, terms, truncs, infos = env.step(actions)
         for a, r in rewards.items():
