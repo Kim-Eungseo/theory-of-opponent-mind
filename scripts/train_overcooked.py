@@ -44,6 +44,9 @@ def main():
                     help="Route trajectory-OM softmax into policy/value head input")
     ap.add_argument("--hidden", type=int, default=256,
                     help="Encoder hidden width (use larger to capacity-match TOM+BAD)")
+    ap.add_argument("--view-radius", type=int, default=None,
+                    help="Partial observability: each agent sees only a (2K+1)^2 window "
+                         "of the lossless grid. Default: full observability (96-dim featurized).")
     ap.add_argument("--shaped-anneal-frac", type=float, default=0.5)
     ap.add_argument("--ckpt-interval", type=int, default=200_000)
     ap.add_argument("--seed", type=int, default=0)
@@ -77,6 +80,7 @@ def main():
         tom_hidden=args.tom_hidden,
         tom_in_policy=args.tom_in_policy,
         hidden=args.hidden,
+        view_radius=args.view_radius,
         shaped_reward_anneal_frac=args.shaped_anneal_frac,
         ckpt_interval_steps=args.ckpt_interval,
         seed=args.seed,

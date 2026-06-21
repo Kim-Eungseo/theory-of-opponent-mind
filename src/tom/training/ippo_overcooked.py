@@ -212,6 +212,8 @@ class IPPOConfig:
     shaped_reward_coef_end: float = 0.0
     shaped_reward_anneal_frac: float = 0.5
 
+    view_radius: int | None = None  # if set: each agent sees only (2K+1)^2 window in lossless grid
+
     log_dir: str = "runs_overcooked/ippo"
     log_interval: int = 1
     ckpt_interval_steps: int = 200_000
@@ -238,6 +240,7 @@ def train(cfg: IPPOConfig) -> str:
         horizon=cfg.horizon,
         shaped_reward_coef=cfg.shaped_reward_coef_start,
         seed=cfg.seed,
+        view_radius=cfg.view_radius,
     )
 
     use_tom = cfg.tom_coef > 0 or cfg.tom_in_policy
@@ -257,6 +260,7 @@ def train(cfg: IPPOConfig) -> str:
         f"[cfg] om_coef={cfg.om_coef:.3f}  om_in_policy={cfg.om_in_policy}  "
         f"som_coef={cfg.som_coef:.3f}  tom_coef={cfg.tom_coef:.3f}  "
         f"tom_K={cfg.tom_history_len}  tom_in_policy={cfg.tom_in_policy}  "
+        f"view_radius={cfg.view_radius}  obs_dim={env.obs_dim}  "
         f"layout={cfg.layout}  num_envs={cfg.num_envs}  total={cfg.total_steps}"
     )
 

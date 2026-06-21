@@ -101,6 +101,12 @@ recordings/
 *.gif
 *.mov
 
+# ── Reference papers (downloaded PDFs) ───────────────────
+# Heavy binary downloads, not source. Keep prose notes (papers/*.md,
+# notes/*.md); drop the PDF cache. Use `git add -f` to force a specific one.
+*.pdf
+papers/pdf/
+
 # ── ViZDoom runtime scratch ──────────────────────────────
 _vizdoom/
 _vizdoom.ini

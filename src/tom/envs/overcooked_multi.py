@@ -34,11 +34,22 @@ class OvercookedMultiAgentEnv:
         horizon: int = 400,
         shaped_reward_coef: float = 0.5,
         seed: int | None = None,
+        view_radius: int | None = None,
     ):
+        """
+        view_radius:
+            None — full observability (96-dim featurized obs, original setup).
+            int K — partial observability: each agent sees a (2K+1)×(2K+1)
+                window of the lossless grid encoding centred on itself.
+                Cells outside the window are zeroed. Obs becomes
+                a flattened W×H×C grid (full grid kept, just masked) so that
+                shapes are uniform across agents and timesteps.
+        """
         self.layout = layout
         self.horizon = horizon
         self.shaped_reward_coef = float(shaped_reward_coef)
         self._rng = np.random.default_rng(seed)
+        self.view_radius = None if view_radius is None or view_radius < 0 else int(view_radius)
 
         self.mdp = OvercookedGridworld.from_layout_name(layout)
         self.env = OvercookedEnv.from_mdp(self.mdp, horizon=horizon)
@@ -46,8 +57,15 @@ class OvercookedMultiAgentEnv:
         self.possible_agents = list(AGENT_IDS)
         self.agents = list(AGENT_IDS)
 
-        feat = self.env.featurize_state_mdp(self.env.state)
-        self.obs_dim = int(feat[0].shape[0])
+        if self.view_radius is None:
+            feat = self.env.featurize_state_mdp(self.env.state)
+            self.obs_dim = int(feat[0].shape[0])
+            self._grid_shape: tuple[int, int, int] | None = None
+        else:
+            grids = self.mdp.lossless_state_encoding(self.env.state)
+            g = np.asarray(grids[0], dtype=np.float32)
+            self._grid_shape = tuple(g.shape)  # (W, H, C)
+            self.obs_dim = int(np.prod(self._grid_shape))
         self.n_actions = Action.NUM_ACTIONS  # 6
 
         self.observation_spaces = {
@@ -104,12 +122,39 @@ class OvercookedMultiAgentEnv:
         return obs, rewards, terms, truncs, infos
 
     def _featurize(self) -> dict[str, np.ndarray]:
-        feats = self.env.featurize_state_mdp(self.env.state)
-        return {a: np.asarray(feats[i], dtype=np.float32) for i, a in enumerate(self.possible_agents)}
+        if self.view_radius is None:
+            feats = self.env.featurize_state_mdp(self.env.state)
+            return {
+                a: np.asarray(feats[i], dtype=np.float32)
+                for i, a in enumerate(self.possible_agents)
+            }
+        return self._featurize_partial()
+
+    def _featurize_partial(self) -> dict[str, np.ndarray]:
+        """Lossless grid encoding with a per-agent (2K+1)×(2K+1) Chebyshev window."""
+        K = self.view_radius
+        state = self.env.state
+        grids = self.mdp.lossless_state_encoding(state)  # list[(W, H, C)]
+        out = {}
+        for i, agent in enumerate(self.possible_agents):
+            grid = np.asarray(grids[i], dtype=np.float32)
+            W, H, _ = grid.shape
+            px, py = state.players[i].position  # (col, row) in overcooked-ai convention
+            mask = np.zeros((W, H), dtype=np.float32)
+            x0, x1 = max(0, px - K), min(W - 1, px + K)
+            y0, y1 = max(0, py - K), min(H - 1, py + K)
+            mask[x0 : x1 + 1, y0 : y1 + 1] = 1.0
+            grid = grid * mask[..., None]
+            out[agent] = grid.reshape(-1)
+        return out
 
     def state(self) -> np.ndarray:
-        feats = self.env.featurize_state_mdp(self.env.state)
-        return np.concatenate([np.asarray(f, dtype=np.float32) for f in feats])
+        if self.view_radius is None:
+            feats = self.env.featurize_state_mdp(self.env.state)
+            return np.concatenate([np.asarray(f, dtype=np.float32) for f in feats])
+        # for global state, return the (un-masked) grid for agent 0 stacked with agent 1
+        grids = self.mdp.lossless_state_encoding(self.env.state)
+        return np.concatenate([np.asarray(g, dtype=np.float32).reshape(-1) for g in grids])
 
     def close(self):
         pass
@@ -129,6 +174,7 @@ class VecOvercookedEnv:
         horizon: int = 400,
         shaped_reward_coef: float = 0.5,
         seed: int = 0,
+        view_radius: int | None = None,
     ):
         self._num_envs = int(num_envs)
         self.envs = [
@@ -137,6 +183,7 @@ class VecOvercookedEnv:
                 horizon=horizon,
                 shaped_reward_coef=shaped_reward_coef,
                 seed=seed + i,
+                view_radius=view_radius,
             )
             for i in range(num_envs)
         ]

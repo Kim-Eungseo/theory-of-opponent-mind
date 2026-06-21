@@ -11,8 +11,12 @@ _LAZY = {
     "VecVizDoomMultiAgentEnv": ("tom.envs.vec_vizdoom", "VecVizDoomMultiAgentEnv"),
     "OvercookedMultiAgentEnv": ("tom.envs.overcooked_multi", "OvercookedMultiAgentEnv"),
     "VecOvercookedEnv": ("tom.envs.overcooked_multi", "VecOvercookedEnv"),
+    "OvercookedSoloEnv": ("tom.envs.overcooked_solo", "OvercookedSoloEnv"),
+    "VecOvercookedSoloEnv": ("tom.envs.overcooked_solo", "VecOvercookedSoloEnv"),
     "HanabiMultiAgentEnv": ("tom.envs.hanabi_multi", "HanabiMultiAgentEnv"),
     "VecHanabiEnv": ("tom.envs.hanabi_multi", "VecHanabiEnv"),
+    "MeltingPotCommonsEnv": ("tom.envs.meltingpot_commons", "MeltingPotCommonsEnv"),
+    "VecMeltingPotCommonsEnv": ("tom.envs.meltingpot_commons", "VecMeltingPotCommonsEnv"),
 }
 
 __all__ = list(_LAZY.keys())
