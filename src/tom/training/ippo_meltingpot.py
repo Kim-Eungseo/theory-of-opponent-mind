@@ -25,7 +25,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from tom.envs.meltingpot_commons import VecMeltingPotCommonsEnv
+# VecMeltingPotCommonsEnv is imported lazily inside train(), so the real
+# dm-meltingpot trainer (which injects its own env + net) doesn't drag in
+# gymnasium / the NumPy substrate.
 
 
 # ---- Network -----------------------------------------------------------
@@ -47,6 +49,53 @@ class ConvActorCritic(nn.Module):
             nn.Conv2d(c, 32, 3, stride=1, padding=1), nn.ReLU(),
             nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.ReLU(),
             nn.Conv2d(64, 64, 3, stride=2, padding=1), nn.ReLU(),
+            nn.Flatten(),
+        )
+        for m in self.encoder:
+            _orth(m, gain=np.sqrt(2))
+        with torch.no_grad():
+            conv_out = self.encoder(torch.zeros(1, c, h, w)).shape[1]
+        self.trunk = nn.Sequential(nn.Linear(conv_out, hidden), nn.ReLU())
+        _orth(self.trunk[0], gain=np.sqrt(2))
+        self.policy_head = nn.Linear(hidden, n_actions)
+        _orth(self.policy_head, gain=0.01)
+        self.value_head = nn.Linear(hidden, 1)
+        _orth(self.value_head, gain=1.0)
+
+    def _features(self, obs: torch.Tensor) -> torch.Tensor:
+        return self.trunk(self.encoder(obs))
+
+    def act(self, obs: torch.Tensor, deterministic: bool = False):
+        h = self._features(obs)
+        logits = self.policy_head(h)
+        dist = torch.distributions.Categorical(logits=logits)
+        a = logits.argmax(-1) if deterministic else dist.sample()
+        return a, dist.log_prob(a), self.value_head(h).squeeze(-1)
+
+    def evaluate(self, obs: torch.Tensor, actions: torch.Tensor):
+        h = self._features(obs)
+        dist = torch.distributions.Categorical(logits=self.policy_head(h))
+        return dist.log_prob(actions), dist.entropy(), self.value_head(h).squeeze(-1)
+
+    def value_only(self, obs: torch.Tensor) -> torch.Tensor:
+        return self.value_head(self._features(obs)).squeeze(-1)
+
+
+class NatureActorCritic(nn.Module):
+    """Atari-style conv actor-critic for the real dm-meltingpot RGB obs.
+
+    Same policy/value interface as :class:`ConvActorCritic`; the encoder is the
+    Mnih-2015 "Nature CNN" (8/4 → 4/2 → 3/1), the standard MeltingPot baseline
+    backbone for the 88×88 egocentric sprite view. Input is float in [0, 1].
+    """
+
+    def __init__(self, obs_shape: tuple[int, int, int], n_actions: int, hidden: int = 512):
+        super().__init__()
+        c, h, w = obs_shape
+        self.encoder = nn.Sequential(
+            nn.Conv2d(c, 32, 8, stride=4), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),
+            nn.Conv2d(64, 64, 3, stride=1), nn.ReLU(),
             nn.Flatten(),
         )
         for m in self.encoder:
@@ -131,7 +180,14 @@ def _tensor(x, device):
     return torch.as_tensor(x, dtype=torch.float32, device=device)
 
 
-def train(cfg: MeltingPotIPPOConfig) -> str:
+def train(cfg: MeltingPotIPPOConfig, env=None, net=None) -> str:
+    """Shared-parameter IPPO.
+
+    By default trains on the pure-NumPy Commons-Harvest substrate. Pass ``env``
+    (any object with the same array API as ``VecMeltingPotCommonsEnv``) and
+    ``net`` to run on a different backend — e.g. the real dm-meltingpot
+    substrate with a :class:`NatureActorCritic` (see ``train_meltingpot_real``).
+    """
     device = (
         torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if cfg.device == "auto"
@@ -140,27 +196,32 @@ def train(cfg: MeltingPotIPPOConfig) -> str:
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
 
-    env = VecMeltingPotCommonsEnv(
-        num_envs=cfg.num_envs,
-        num_players=cfg.num_players,
-        map_name=cfg.map_name,
-        horizon=cfg.horizon,
-        view_radius=cfg.view_radius,
-        beam_length=cfg.beam_length,
-        freeze_steps=cfg.freeze_steps,
-        seed=cfg.seed,
-    )
-    P, C = cfg.num_players, env.obs_shape[0]
-    B = cfg.num_envs * P  # shared net sees every player's transition
+    if env is None:
+        from tom.envs.meltingpot_commons import VecMeltingPotCommonsEnv
+        env = VecMeltingPotCommonsEnv(
+            num_envs=cfg.num_envs,
+            num_players=cfg.num_players,
+            map_name=cfg.map_name,
+            horizon=cfg.horizon,
+            view_radius=cfg.view_radius,
+            beam_length=cfg.beam_length,
+            freeze_steps=cfg.freeze_steps,
+            seed=cfg.seed,
+        )
+    P = env.num_players
+    N = env.num_envs
+    B = N * P  # shared net sees every player's transition
 
-    net = ConvActorCritic(env.obs_shape, env.n_actions, cfg.hidden).to(device)
+    if net is None:
+        net = ConvActorCritic(env.obs_shape, env.n_actions, cfg.hidden)
+    net = net.to(device)
     opt = torch.optim.Adam(net.parameters(), lr=cfg.lr)
     n_params = sum(p.numel() for p in net.parameters())
 
     print(
-        f"[cfg] substrate=commons_harvest/{cfg.map_name}  players={P}  "
+        f"[cfg] env={type(env).__name__}  players={P}  "
         f"obs_shape={env.obs_shape}  n_actions={env.n_actions}  "
-        f"num_envs={cfg.num_envs}  rollout={cfg.rollout}  B={B}  "
+        f"num_envs={N}  rollout={cfg.rollout}  B={B}  "
         f"params={n_params/1e3:.0f}K  total={cfg.total_steps}  device={device}"
     )
 
@@ -183,7 +244,7 @@ def train(cfg: MeltingPotIPPOConfig) -> str:
     obs_shape = env.obs_shape
 
     global_step = start_step
-    iters = (cfg.total_steps - start_step) // (cfg.rollout * cfg.num_envs * P) + 1
+    iters = (cfg.total_steps - start_step) // (cfg.rollout * N * P) + 1
     roll_coll, roll_equal, roll_pc, roll_apples = [], [], [], []
     t0 = time.time()
 
@@ -213,7 +274,7 @@ def train(cfg: MeltingPotIPPOConfig) -> str:
             buf["logprobs"][t] = logp
             buf["values"][t] = val
 
-            act_np = act.cpu().numpy().reshape(cfg.num_envs, P)
+            act_np = act.cpu().numpy().reshape(N, P)
             obs, rew, _term, trunc, info = env.step(act_np)
 
             buf["rewards"][t] = _tensor(rew.reshape(B), device)
@@ -223,8 +284,8 @@ def train(cfg: MeltingPotIPPOConfig) -> str:
                     roll_coll.append(c["collective_return"])
                     roll_equal.append(c["equality"])
                     roll_pc.append(c["per_capita_return"])
-                    roll_apples.append(c["apples_remaining"])
-            global_step += cfg.num_envs * P
+                    roll_apples.append(c.get("apples_remaining", float("nan")))
+            global_step += N * P
 
         with torch.no_grad():
             last_values = net.value_only(_tensor(flat_obs(obs), device))
@@ -284,16 +345,19 @@ def train(cfg: MeltingPotIPPOConfig) -> str:
                 mc = float(np.mean(roll_coll[-50:]))
                 mpc = float(np.mean(roll_pc[-50:]))
                 meq = float(np.mean(roll_equal[-50:]))
-                mar = float(np.mean(roll_apples[-50:]))
                 writer.add_scalar("ep/collective_return", mc, global_step)
                 writer.add_scalar("ep/per_capita_return", mpc, global_step)
                 writer.add_scalar("ep/equality", meq, global_step)
-                writer.add_scalar("ep/apples_remaining", mar, global_step)
-                score = f"coll={mc:7.1f}  per_capita={mpc:6.2f}  equality={meq:.2f}  apples_left={mar:4.1f}"
+                score = f"coll={mc:7.1f}  per_capita={mpc:6.2f}  equality={meq:.2f}"
+                apples = [x for x in roll_apples[-50:] if x == x]  # drop NaN (real substrate omits it)
+                if apples:
+                    mar = float(np.mean(apples))
+                    writer.add_scalar("ep/apples_remaining", mar, global_step)
+                    score += f"  apples_left={mar:4.1f}"
             print(f"[{global_step:>9d}/{cfg.total_steps}] fps={fps:>6d}  {score}")
 
         if (global_step // cfg.ckpt_interval_steps) > (
-            (global_step - cfg.rollout * cfg.num_envs * P) // cfg.ckpt_interval_steps
+            (global_step - cfg.rollout * N * P) // cfg.ckpt_interval_steps
         ):
             cpath = os.path.join(cfg.log_dir, f"ckpt_{global_step:09d}.pt")
             torch.save({"step": global_step, "net": net.state_dict(),

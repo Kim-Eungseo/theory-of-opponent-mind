@@ -17,6 +17,8 @@ _LAZY = {
     "VecHanabiEnv": ("tom.envs.hanabi_multi", "VecHanabiEnv"),
     "MeltingPotCommonsEnv": ("tom.envs.meltingpot_commons", "MeltingPotCommonsEnv"),
     "VecMeltingPotCommonsEnv": ("tom.envs.meltingpot_commons", "VecMeltingPotCommonsEnv"),
+    "MeltingPotSubstrateEnv": ("tom.envs.meltingpot_substrate", "MeltingPotSubstrateEnv"),
+    "VecMeltingPotSubstrateEnv": ("tom.envs.meltingpot_substrate", "VecMeltingPotSubstrateEnv"),
 }
 
 __all__ = list(_LAZY.keys())

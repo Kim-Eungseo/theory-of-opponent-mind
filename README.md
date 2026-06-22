@@ -11,7 +11,8 @@ to run.
 
 | Env | Domain | Framework | Status |
 |-----|--------|-----------|--------|
-| `tom-coop` | Overcooked + Hanabi + MeltingPot | PyTorch + own IPPO | **active** |
+| `tom-coop` | Overcooked + Hanabi + MeltingPot (NumPy reimpl) | PyTorch + own IPPO | **active** |
+| `tom-meltingpot` | MeltingPot (real, dmlab2d substrates) | PyTorch + own IPPO | **active** |
 | `tom-sf`   | ViZDoom 1v1 (adversarial) | Sample-Factory | dormant |
 | `tom-carroll` | Overcooked Carroll-2019 reference | RLLib + TF | reproduction-only |
 
@@ -62,7 +63,7 @@ PYTHONPATH=src python scripts/train_hanabi.py \
     --total-steps 50000 --num-envs 8 --rollout-steps 64 --log-dir runs_hanabi/smoke
 ```
 
-### MeltingPot Commons-Harvest (PyTorch, no extra deps)
+### MeltingPot Commons-Harvest — backend A: pure-NumPy reimplementation (no extra deps)
 
 A self-contained re-implementation of MeltingPot's canonical
 `commons_harvest__open` substrate — a *tragedy-of-the-commons* social dilemma.
@@ -113,6 +114,52 @@ pre-collapse* policy; `ckpt_final.pt` holds the depleted-equilibrium one. This
 is the motivating baseline for partner-aware variants (add the OM/SOM/TOM aux
 heads from `ippo_overcooked` to the conv trunk to study whether modeling
 co-players' harvest intent can sustain the commons).
+
+### MeltingPot Commons-Harvest — backend B: the real `dm-meltingpot`
+
+The genuine DeepMind substrate (dmlab2d-backed). Because `dmlab2d` only ships
+wheels for cpython 3.10/3.11, it lives in its own conda env:
+
+```bash
+conda create -n tom-meltingpot python=3.11 -y
+conda activate tom-meltingpot
+pip install --only-binary=dmlab2d dm-meltingpot      # pulls dmlab2d + bundled assets (~0.5 GB wheel)
+pip install torch --index-url https://download.pytorch.org/whl/cu128   # Blackwell sm_120; pick your CUDA
+pip install tensorboard gymnasium
+```
+
+`src/tom/envs/meltingpot_substrate.py` wraps any of the 49 substrates behind the
+*same* array API as the NumPy version, so the IPPO trainer
+(`tom.training.ippo_meltingpot.train`) runs unchanged — only the observation
+(real egocentric **88×88×3 RGB** sprites) and the conv backbone
+(`NatureActorCritic`, a Nature-CNN) differ. `commons_harvest__open` runs
+**7 players**, 8 actions, ~7.7k agent-steps/s on a single GPU.
+
+```bash
+conda run -n tom-meltingpot env PYTHONPATH=src TF_CPP_MIN_LOG_LEVEL=3 \
+    python scripts/train_meltingpot_real.py \
+    --substrate commons_harvest__open --num-envs 6 \
+    --total-steps 1000000 --rollout 100 --seed 0
+```
+
+Observed (seed 0, 6 envs, ~6.5k agent-steps/s, **~3 min for 1M steps** on one GPU):
+
+| env-steps | collective | per-capita | equality |
+|---:|---:|---:|---:|
+| 113k | 206 (peak) | 29.5 | 0.59 |
+| 504k | 130 | 18.6 | 0.71 |
+| 1.0M | 86 | 12.3 | 0.75 |
+
+At 1M steps the policy is still near-random (`loss/ent` ≈ −2.0 vs the ln 8 = 2.08
+maximum; `kl` ≈ 0.001), so vanilla IPPO underfits and collective return drifts
+*down* as the commons depletes. That is the expected scale story — **1M
+agent-steps ≈ only ~140 episodes** of 88×88 RGB across 7 players. Treat this as a
+correctly-wired, runnable baseline, not a tuned result.
+
+> Real MeltingPot is far harder than the NumPy toy (RGB perception, 7 players,
+> 1000-step episodes); 1M steps is small by MeltingPot standards (published
+> baselines use 100M–1B steps + population-based training), so expect a
+> clear-but-modest upward trend, not state-of-the-art numbers.
 
 ### `tom-sf` — ViZDoom 1v1 (Sample-Factory)
 
@@ -197,18 +244,20 @@ src/tom/
 │   ├── vec_vizdoom.py          # vectorised wrapper for ViZDoom
 │   ├── overcooked_multi.py     # 2-agent Overcooked, dict API
 │   ├── hanabi_multi.py         # turn-based 2-player Hanabi (HLE)
-│   └── meltingpot_commons.py   # N-agent Commons-Harvest (pure NumPy, no dmlab2d)
+│   ├── meltingpot_commons.py   # N-agent Commons-Harvest (pure NumPy, no dmlab2d)
+│   └── meltingpot_substrate.py # real dm-meltingpot substrates (dmlab2d, tom-meltingpot env)
 └── training/
     ├── ippo_overcooked.py      # IPPO + OM/SOM/TOM aux + BAD routing
     ├── ippo_hanabi.py          # shared-policy PPO + belief aux + BAD routing
     ├── ippo_hanabi_lstm.py     # recurrent variant (true BPTT)
-    ├── ippo_meltingpot.py      # shared-param IPPO + conv actor-critic
+    ├── ippo_meltingpot.py      # shared-param IPPO; ConvActorCritic (NumPy) + NatureActorCritic (real)
     └── skrl_ppo.py             # legacy ViZDoom IPPO via skrl
 
 scripts/
 ├── train_overcooked.py         # main Overcooked CLI
 ├── train_hanabi.py             # main Hanabi CLI
-├── train_meltingpot.py         # MeltingPot Commons-Harvest CLI
+├── train_meltingpot.py         # MeltingPot Commons-Harvest CLI (NumPy backend)
+├── train_meltingpot_real.py    # real dm-meltingpot CLI (tom-meltingpot env)
 ├── train_hanabi_lstm.py
 ├── probe_overcooked.py         # linear probing of OM info in encoder
 ├── train_skrl.py               # legacy ViZDoom training
